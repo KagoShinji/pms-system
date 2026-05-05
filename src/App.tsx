@@ -5,6 +5,7 @@ import { getActiveUser, getUsers, setActiveUser } from "@/services/mockAuthServi
 import LandingPage from "@/pages/LandingPage"
 import LoginPage from "@/pages/LoginPage"
 import PmsWorkspace from "@/pages/PmsWorkspace"
+import { SplashScreen } from "@/components/SplashScreen"
 
 type AppView = "home" | "login" | "workspace"
 
@@ -18,6 +19,7 @@ function isLoggedIn(): boolean {
 export default function App() {
   const users = getUsers()
   const currentUser = getActiveUser()
+  const [splashDone, setSplashDone] = useState(false)
   const [view, setView] = useState<AppView>(isLoggedIn() ? "workspace" : "home")
 
   function handleLogin(payload: { userId: string; password: string }) {
@@ -40,6 +42,10 @@ export default function App() {
     localStorage.removeItem(SESSION_KEY)
     setView("home")
     toast.info("You are signed out.")
+  }
+
+  if (!splashDone) {
+    return <SplashScreen onDone={() => setSplashDone(true)} />
   }
 
   if (view === "home") {

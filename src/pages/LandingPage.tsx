@@ -18,8 +18,8 @@ export default function LandingPage({ onLoginClick }: LandingPageProps) {
   const [year] = useState(() => new Date().getFullYear())
 
   return (
-    <div className="relative min-h-[100dvh] overflow-x-hidden bg-[#080808] text-white">
-      <div className="fixed inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.035)_1px,transparent_1px),linear-gradient(180deg,rgba(255,255,255,0.025)_1px,transparent_1px)] bg-[size:72px_72px]" />
+    <div className="relative min-h-dvh overflow-x-hidden bg-[#080808] text-white">
+      <div className="fixed inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.035)_1px,transparent_1px),linear-gradient(180deg,rgba(255,255,255,0.025)_1px,transparent_1px)] bg-size-[72px_72px]" />
       <div className="fixed inset-x-0 top-0 h-1 bg-[#e3372f]" />
 
       <main className="relative flex w-full max-w-full flex-col">
