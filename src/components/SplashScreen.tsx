@@ -143,6 +143,16 @@ export function SplashScreen({ onDone }: SplashScreenProps) {
 
         {/* Bottom red accent bar */}
         <div className="splash-top-line absolute inset-x-0 bottom-0 h-0.75 bg-[#e3372f]" />
+
+        {/* Created by */}
+        <a
+          href="https://www.facebook.com/profile.php?id=61587269647950"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="splash-item-4 absolute bottom-4 font-mono text-[10px] uppercase tracking-[0.22em] text-white/25 transition-colors duration-200 hover:text-white/50"
+        >
+          Created by: ODC
+        </a>
       </div>
     </>
   )
