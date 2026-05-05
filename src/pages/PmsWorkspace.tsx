@@ -3,7 +3,6 @@ import { useTheme } from "next-themes"
 import { toast } from "sonner"
 import {
   BarChart3Icon,
-  CalendarCheck2Icon,
   CarIcon,
   ClipboardListIcon,
   DownloadIcon,
@@ -643,11 +642,15 @@ function PmsWorkspace({ onLogout }: PmsWorkspaceProps) {
         )}
       >
         {/* Logo */}
-        <div className="flex items-center gap-2.5 border-b border-zinc-800 px-5 py-4">
-          <CalendarCheck2Icon size={17} className="shrink-0 text-zinc-400" />
+        <div className="flex items-center gap-3 border-b border-zinc-800 px-4 py-3.5">
+          <img
+            src="/speclogo.jpg"
+            alt="SPEC-C"
+            className="size-10 shrink-0 rounded-md object-cover"
+          />
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold tracking-tight text-zinc-100">PMS System</p>
-            <p className="text-[10px] uppercase tracking-widest text-zinc-500">Maintenance</p>
+            <p className="truncate text-sm font-bold tracking-tight text-zinc-100">SPEC-C</p>
+            <p className="truncate text-[10px] font-medium uppercase tracking-widest text-red-500">Auto PMS Xpress</p>
           </div>
         </div>
 
