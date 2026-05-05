@@ -1,4 +1,4 @@
-import { type FormEvent, useMemo, useState } from "react"
+import { type FormEvent, useMemo, useRef, useState } from "react"
 import { useTheme } from "next-themes"
 import { toast } from "sonner"
 import {
@@ -6,6 +6,8 @@ import {
   CarIcon,
   ClipboardListIcon,
   DownloadIcon,
+  ExternalLinkIcon,
+  FileDownIcon,
   GaugeIcon,
   LayoutDashboardIcon,
   LogOutIcon,
@@ -16,6 +18,7 @@ import {
   PlusCircleIcon,
   PlusIcon,
   ReceiptIcon,
+  ScanTextIcon,
   SearchIcon,
   ShieldIcon,
   ShoppingCartIcon,
@@ -24,6 +27,7 @@ import {
   Trash2Icon,
   TrendingUpIcon,
   XIcon,
+  PrinterIcon,
 } from "lucide-react"
 
 import { cn } from "@/lib/utils"
@@ -50,7 +54,7 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import { getActiveUser, getUsers, setActiveUser, updateUserRole } from "@/services/mockAuthService"
 import { storageService } from "@/services/storageService"
-import type { AppUser, InventoryItem, PMSRecord, SaleTransaction, UserRole } from "@/types/pms"
+import type { AppUser, InventoryItem, PMSRecord, SaleLineItem, SaleTransaction, UserRole } from "@/types/pms"
 
 type Page = "dashboard" | "create" | "records" | "admin" | "inventory" | "pos" | "analytics"
 type SearchField = "all" | "name" | "vehicle" | "licensePlate"
@@ -97,14 +101,17 @@ const INV_KEY = "pms-inventory-v1"
 const TXN_KEY = "pms-transactions-v1"
 
 const SEED_INVENTORY: Omit<InventoryItem, "id" | "createdAt" | "updatedAt">[] = [
-  { name: "Engine Oil (4L)", sku: "OIL-4L-10W40", category: "Fluids", quantity: 24, unitCost: 580, reorderLevel: 6 },
-  { name: "Oil Filter", sku: "FLT-OIL-UNI", category: "Filters", quantity: 18, unitCost: 120, reorderLevel: 5 },
-  { name: "Air Filter", sku: "FLT-AIR-UNI", category: "Filters", quantity: 12, unitCost: 180, reorderLevel: 4 },
-  { name: "Brake Pad Set (Front)", sku: "BRK-PAD-FR", category: "Brakes", quantity: 8, unitCost: 950, reorderLevel: 3 },
-  { name: "Wiper Blade (Pair)", sku: "WIP-PAIR-24", category: "Accessories", quantity: 15, unitCost: 320, reorderLevel: 4 },
-  { name: "Spark Plug (Set of 4)", sku: "IGN-PLUG-4", category: "Ignition", quantity: 3, unitCost: 620, reorderLevel: 4 },
-  { name: "Coolant (1L)", sku: "COOL-1L-GRN", category: "Fluids", quantity: 20, unitCost: 140, reorderLevel: 5 },
-  { name: "Battery (MF 70AH)", sku: "BAT-MF-70AH", category: "Electrical", quantity: 4, unitCost: 3800, reorderLevel: 2 },
+  { name: "Engine Oil (4L)", sku: "OIL-4L-10W40", itemType: "product", category: "Fluids", quantity: 24, unitCost: 580, reorderLevel: 6 },
+  { name: "Oil Filter", sku: "FLT-OIL-UNI", itemType: "product", category: "Filters", quantity: 18, unitCost: 120, reorderLevel: 5 },
+  { name: "Air Filter", sku: "FLT-AIR-UNI", itemType: "product", category: "Filters", quantity: 12, unitCost: 180, reorderLevel: 4 },
+  { name: "Brake Pad Set (Front)", sku: "BRK-PAD-FR", itemType: "product", category: "Brakes", quantity: 8, unitCost: 950, reorderLevel: 3 },
+  { name: "Wiper Blade (Pair)", sku: "WIP-PAIR-24", itemType: "product", category: "Accessories", quantity: 15, unitCost: 320, reorderLevel: 4 },
+  { name: "Spark Plug (Set of 4)", sku: "IGN-PLUG-4", itemType: "product", category: "Ignition", quantity: 3, unitCost: 620, reorderLevel: 4 },
+  { name: "Coolant (1L)", sku: "COOL-1L-GRN", itemType: "product", category: "Fluids", quantity: 20, unitCost: 140, reorderLevel: 5 },
+  { name: "Battery (MF 70AH)", sku: "BAT-MF-70AH", itemType: "product", category: "Electrical", quantity: 4, unitCost: 3800, reorderLevel: 2 },
+  { name: "PMS Labor Package", sku: "SRV-PMS-LABOR", itemType: "service", category: "Services", quantity: 0, unitCost: 1500, reorderLevel: 0 },
+  { name: "Computerized Diagnostic Scan", sku: "SRV-DIAG-SCAN", itemType: "service", category: "Services", quantity: 0, unitCost: 850, reorderLevel: 0 },
+  { name: "Wheel Alignment", sku: "SRV-WHL-ALIGN", itemType: "service", category: "Services", quantity: 0, unitCost: 1200, reorderLevel: 0 },
 ]
 
 function readInventory(): InventoryItem[] {
@@ -118,7 +125,24 @@ function readInventory(): InventoryItem[] {
       localStorage.setItem(INV_KEY, JSON.stringify(seeded))
       return seeded
     }
-    return JSON.parse(raw) as InventoryItem[]
+    const parsed = (JSON.parse(raw) as InventoryItem[]).map((item) => ({
+      ...item,
+      itemType: item.itemType ?? "product",
+    }))
+    const existingSkus = new Set(parsed.map((item) => item.sku))
+    const now = new Date().toISOString()
+    const missingServices = SEED_INVENTORY
+      .filter((seed) => seed.itemType === "service" && !existingSkus.has(seed.sku))
+      .map((seed) => ({
+        ...seed,
+        id: crypto.randomUUID(),
+        createdAt: now,
+        updatedAt: now,
+      }))
+    if (missingServices.length === 0) return parsed
+    const merged = [...missingServices, ...parsed]
+    localStorage.setItem(INV_KEY, JSON.stringify(merged))
+    return merged
   } catch { return [] }
 }
 
@@ -138,6 +162,7 @@ function writeTransactions(txns: SaleTransaction[]) {
 type InventoryFormState = {
   name: string
   sku: string
+  itemType: "product" | "service"
   category: string
   quantity: string
   unitCost: string
@@ -145,10 +170,35 @@ type InventoryFormState = {
 }
 
 const initialInvForm: InventoryFormState = {
-  name: "", sku: "", category: "", quantity: "", unitCost: "", reorderLevel: "",
+  name: "", sku: "", itemType: "product", category: "", quantity: "", unitCost: "", reorderLevel: "",
 }
 
 type CartEntry = { item: InventoryItem; qty: number }
+type PendingSale = { txn: SaleTransaction; cartEntries: CartEntry[] }
+
+const INVOICE_LOGO_PATH = "/speclogo.jpg"
+let invoiceLogoDataUrlPromise: Promise<string | null> | null = null
+
+function getInvoiceLogoUrl() {
+  return new URL(INVOICE_LOGO_PATH, window.location.origin).toString()
+}
+
+function getInvoiceLogoDataUrl() {
+  if (invoiceLogoDataUrlPromise) return invoiceLogoDataUrlPromise
+  invoiceLogoDataUrlPromise = fetch(getInvoiceLogoUrl())
+    .then((response) => {
+      if (!response.ok) throw new Error("Invoice logo fetch failed")
+      return response.blob()
+    })
+    .then((blob) => new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result))
+      reader.onerror = () => reject(new Error("Invoice logo conversion failed"))
+      reader.readAsDataURL(blob)
+    }))
+    .catch(() => null)
+  return invoiceLogoDataUrlPromise
+}
 
 function validateForm(form: FormState): Partial<Record<keyof FormState, string>> {
   const errors: Partial<Record<keyof FormState, string>> = {}
@@ -165,6 +215,225 @@ function validateForm(form: FormState): Partial<Record<keyof FormState, string>>
     errors.currentOdo = "Current odometer must be numeric."
   }
   return errors
+}
+
+function formatMoney(value: number) {
+  return `₱${value.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;")
+}
+
+function invoiceHtml(txn: SaleTransaction) {
+  const logoUrl = getInvoiceLogoUrl()
+  const receiptNo = txn.id.slice(0, 8).toUpperCase()
+  const rows = txn.lineItems.map((line) => {
+    const lineTotal = line.quantity * line.unitPrice
+    return `
+      <tr>
+        <td>${escapeHtml(line.itemName)}<div class="muted">${escapeHtml(line.sku)}</div></td>
+        <td>${line.quantity}</td>
+        <td>${formatMoney(line.unitPrice)}</td>
+        <td>${formatMoney(lineTotal)}</td>
+      </tr>
+    `
+  }).join("")
+
+  const stamp = new Date(txn.createdAt)
+  return `<!doctype html>
+  <html>
+    <head>
+      <meta charset="UTF-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <title>Receipt ${escapeHtml(receiptNo)}</title>
+      <style>
+        :root { color-scheme: light; }
+        body {
+          margin: 0;
+          padding: 26px;
+          font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+          background: #e4e4e7;
+          color: #18181b;
+        }
+        .receipt {
+          max-width: 820px;
+          margin: 0 auto;
+          border: 1.5px solid #27272a;
+          border-radius: 16px;
+          background: #ffffff;
+          box-shadow: 0 8px 24px rgba(24, 24, 27, 0.08);
+          overflow: hidden;
+        }
+        .headerline {
+          height: 5px;
+          background: linear-gradient(90deg, #ef4444, #27272a 50%, #ef4444);
+        }
+        .head {
+          padding: 18px 24px 16px;
+          border-bottom: 1.5px solid #3f3f46;
+          display: flex;
+          justify-content: space-between;
+          gap: 14px;
+          flex-wrap: wrap;
+        }
+        .brand-wrap {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+        .logo {
+          width: 38px;
+          height: 38px;
+          border-radius: 6px;
+          object-fit: cover;
+          border: 1px solid #52525b;
+        }
+        .brand { font-weight: 800; letter-spacing: .09em; font-size: 12px; text-transform: uppercase; color: #27272a; }
+        .sub { color: #52525b; font-size: 11px; margin-top: 5px; }
+        .doc { text-align: right; }
+        .doc h1 { margin: 0; font-size: 32px; line-height: 1; color: #27272a; letter-spacing: -0.02em; }
+        .doc p { margin: 3px 0 0; font-family: "IBM Plex Mono", monospace; color: #52525b; font-size: 11px; }
+        .receipt-tag {
+          display: inline-flex;
+          margin-top: 5px;
+          border: 1px solid #a1a1aa;
+          padding: 2px 8px;
+          border-radius: 999px;
+          font-size: 10px;
+          text-transform: uppercase;
+          letter-spacing: .08em;
+          color: #52525b;
+          font-weight: 600;
+        }
+        .meta {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(180px, 1fr));
+          gap: 10px;
+          padding: 14px 24px;
+          border-bottom: 1px solid #d4d4d8;
+        }
+        .meta-card {
+          border: 1px solid #71717a;
+          border-radius: 10px;
+          background: #f4f4f5;
+          padding: 10px;
+        }
+        .meta-card b { display: block; color: #52525b; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
+        .meta-card span { display: block; margin-top: 5px; color: #27272a; font-size: 13px; }
+        table {
+          width: calc(100% - 48px);
+          margin: 14px 24px;
+          border-collapse: collapse;
+          border: 1px solid #71717a;
+          border-radius: 10px;
+          overflow: hidden;
+        }
+        th, td { padding: 10px; border-bottom: 1px solid #d4d4d8; font-size: 12px; }
+        th { text-align: left; color: #52525b; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; background: #f4f4f5; }
+        td:nth-child(2), td:nth-child(3), td:nth-child(4) { font-family: "IBM Plex Mono", monospace; }
+        td:nth-child(2), td:nth-child(3), td:nth-child(4) { text-align: right; }
+        .muted { color: #71717a; font-size: 10px; margin-top: 3px; }
+        .totals {
+          margin: 2px 24px 16px;
+          margin-left: auto;
+          width: min(320px, calc(100% - 48px));
+          border: 1px solid #71717a;
+          border-radius: 10px;
+          overflow: hidden;
+          background: #f9fafb;
+        }
+        .row { display: flex; justify-content: space-between; padding: 10px 12px; font-size: 12px; color: #3f3f46; }
+        .row + .row { border-top: 1px solid #d4d4d8; }
+        .row b { font-family: "IBM Plex Mono", monospace; }
+        .grand { font-size: 14px; color: #111827; background: #eceff1; font-weight: 700; }
+        .footerline {
+          border-top: 1.5px solid #3f3f46;
+          margin: 0 24px;
+          height: 1px;
+        }
+        .foot {
+          margin: 8px 24px 18px;
+          display: flex;
+          justify-content: space-between;
+          gap: 12px;
+          color: #52525b;
+          font-size: 10px;
+        }
+        .mono { font-family: "IBM Plex Mono", monospace; }
+        .thank-you {
+          margin: 0 24px 10px;
+          text-align: center;
+          color: #3f3f46;
+          font-size: 11px;
+          font-weight: 600;
+          letter-spacing: .05em;
+          text-transform: uppercase;
+        }
+        @media print {
+          body { padding: 0; background: #ffffff; }
+          .receipt {
+            box-shadow: none;
+            border-radius: 0;
+            border-left: 0;
+            border-right: 0;
+          }
+        }
+      </style>
+    </head>
+    <body>
+      <div class="receipt">
+        <div class="headerline"></div>
+        <div class="head">
+          <div class="brand-wrap">
+            <img src="${escapeHtml(logoUrl)}" alt="SPEC-C" class="logo" />
+            <div>
+              <div class="brand">SPEC-C Auto PMS Xpress</div>
+              <div class="sub">Auto Service and Preventive Maintenance</div>
+            </div>
+          </div>
+          <div class="doc">
+            <h1>Receipt</h1>
+            <p class="mono">No. ${escapeHtml(receiptNo)}</p>
+            <span class="receipt-tag">Sales Receipt</span>
+          </div>
+        </div>
+        <div class="meta">
+          <div class="meta-card"><b>Date / Time</b><span>${escapeHtml(stamp.toLocaleString())}</span></div>
+          <div class="meta-card"><b>Cashier</b><span>${escapeHtml(txn.processedBy)}</span></div>
+          <div class="meta-card"><b>Item Count</b><span class="mono">${txn.lineItems.reduce((sum, item) => sum + item.quantity, 0)}</span></div>
+          <div class="meta-card"><b>Transaction ID</b><span class="mono">${escapeHtml(txn.id)}</span></div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Description</th>
+              <th>Qty</th>
+              <th>Unit Price</th>
+              <th>Line Total</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <div class="totals">
+          <div class="row"><span>Subtotal</span><b>${formatMoney(txn.subtotal)}</b></div>
+          <div class="row"><span>Discount</span><b>- ${formatMoney(txn.discount)}</b></div>
+          <div class="row grand"><span>Amount Paid</span><b>${formatMoney(txn.total)}</b></div>
+        </div>
+        <p class="thank-you">Thank you for choosing SPEC-C</p>
+        <div class="footerline"></div>
+        <div class="foot">
+          <span>This document is system generated and valid without signature.</span>
+          <span class="mono">Generated ${escapeHtml(new Date().toLocaleString())}</span>
+        </div>
+      </div>
+    </body>
+  </html>`
 }
 
 function PmsWorkspace({ onLogout }: PmsWorkspaceProps) {
@@ -199,9 +468,22 @@ function PmsWorkspace({ onLogout }: PmsWorkspaceProps) {
   const [cart, setCart] = useState<CartEntry[]>([])
   const [posSearch, setPosSearch] = useState("")
   const [posDiscount, setPosDiscount] = useState("")
+  const [pendingSale, setPendingSale] = useState<PendingSale | null>(null)
+  const [latestInvoice, setLatestInvoice] = useState<SaleTransaction | null>(null)
+  const [savingInvoicePdf, setSavingInvoicePdf] = useState(false)
+  const [invoicePreviewUrl, setInvoicePreviewUrl] = useState<string | null>(null)
+  const [invoicePreviewKind, setInvoicePreviewKind] = useState<"html" | "pdf" | null>(null)
+  const [invoicePreviewName, setInvoicePreviewName] = useState("")
+  const [printAfterPreviewLoad, setPrintAfterPreviewLoad] = useState(false)
+  const invoicePreviewRef = useRef<HTMLIFrameElement | null>(null)
 
   // ── Transactions state ──
   const [transactions, setTransactions] = useState<SaleTransaction[]>(() => readTransactions())
+
+  const discountPct = Math.min(100, Math.max(0, Number(posDiscount) || 0))
+  const cartSubtotal = cart.reduce((sum, entry) => sum + entry.item.unitCost * entry.qty, 0)
+  const cartDiscount = cartSubtotal * (discountPct / 100)
+  const cartTotal = cartSubtotal - cartDiscount
 
   async function refreshRecords() {
     const next = await storageService.listRecords()
@@ -509,6 +791,7 @@ function PmsWorkspace({ onLogout }: PmsWorkspaceProps) {
     const e: Partial<Record<keyof InventoryFormState, string>> = {}
     if (!f.name.trim()) e.name = "Name is required."
     if (!f.sku.trim()) e.sku = "SKU is required."
+    if (!f.itemType) e.itemType = "Type is required."
     if (!f.category.trim()) e.category = "Category is required."
     if (!f.quantity.trim() || Number.isNaN(Number(f.quantity))) e.quantity = "Valid quantity required."
     if (!f.unitCost.trim() || Number.isNaN(Number(f.unitCost))) e.unitCost = "Valid unit cost required."
@@ -526,12 +809,12 @@ function PmsWorkspace({ onLogout }: PmsWorkspaceProps) {
     if (editingItem) {
       next = inventoryItems.map((it) =>
         it.id === editingItem.id
-          ? { ...it, name: invForm.name.trim(), sku: invForm.sku.trim().toUpperCase(), category: invForm.category.trim(), quantity: Number(invForm.quantity), unitCost: Number(invForm.unitCost), reorderLevel: Number(invForm.reorderLevel), updatedAt: now }
+          ? { ...it, name: invForm.name.trim(), sku: invForm.sku.trim().toUpperCase(), itemType: invForm.itemType, category: invForm.category.trim(), quantity: Number(invForm.quantity), unitCost: Number(invForm.unitCost), reorderLevel: Number(invForm.reorderLevel), updatedAt: now }
           : it,
       )
       toast.success("Item updated.")
     } else {
-      const newItem: InventoryItem = { id: crypto.randomUUID(), name: invForm.name.trim(), sku: invForm.sku.trim().toUpperCase(), category: invForm.category.trim(), quantity: Number(invForm.quantity), unitCost: Number(invForm.unitCost), reorderLevel: Number(invForm.reorderLevel), createdAt: now, updatedAt: now }
+      const newItem: InventoryItem = { id: crypto.randomUUID(), name: invForm.name.trim(), sku: invForm.sku.trim().toUpperCase(), itemType: invForm.itemType, category: invForm.category.trim(), quantity: Number(invForm.quantity), unitCost: Number(invForm.unitCost), reorderLevel: Number(invForm.reorderLevel), createdAt: now, updatedAt: now }
       next = [newItem, ...inventoryItems]
       toast.success("Item added.")
     }
@@ -545,7 +828,7 @@ function PmsWorkspace({ onLogout }: PmsWorkspaceProps) {
 
   function startEditItem(item: InventoryItem) {
     setEditingItem(item)
-    setInvForm({ name: item.name, sku: item.sku, category: item.category, quantity: String(item.quantity), unitCost: String(item.unitCost), reorderLevel: String(item.reorderLevel) })
+    setInvForm({ name: item.name, sku: item.sku, itemType: item.itemType, category: item.category, quantity: String(item.quantity), unitCost: String(item.unitCost), reorderLevel: String(item.reorderLevel) })
     setInvFormErrors({})
     setShowInvForm(true)
   }
@@ -560,11 +843,11 @@ function PmsWorkspace({ onLogout }: PmsWorkspaceProps) {
 
   // ── POS functions ────────────────────────────────────────────────────────
   function addToCart(item: InventoryItem) {
-    if (item.quantity === 0) { toast.error("Item is out of stock."); return }
+    if (item.itemType === "product" && item.quantity === 0) { toast.error("Item is out of stock."); return }
     setCart((prev) => {
       const existing = prev.find((e) => e.item.id === item.id)
       if (existing) {
-        if (existing.qty >= item.quantity) { toast.error("Not enough stock."); return prev }
+        if (item.itemType === "product" && existing.qty >= item.quantity) { toast.error("Not enough stock."); return prev }
         return prev.map((e) => e.item.id === item.id ? { ...e, qty: e.qty + 1 } : e)
       }
       return [...prev, { item, qty: 1 }]
@@ -577,40 +860,239 @@ function PmsWorkspace({ onLogout }: PmsWorkspaceProps) {
         if (e.item.id !== itemId) return [e]
         const next = e.qty + delta
         if (next <= 0) return []
-        if (next > e.item.quantity) { toast.error("Not enough stock."); return [e] }
+        if (e.item.itemType === "product" && next > e.item.quantity) { toast.error("Not enough stock."); return [e] }
         return [{ ...e, qty: next }]
       }),
     )
   }
 
+  function replaceInvoicePreview(url: string, kind: "html" | "pdf", name: string, printOnLoad = false) {
+    if (invoicePreviewUrl) URL.revokeObjectURL(invoicePreviewUrl)
+    setInvoicePreviewUrl(url)
+    setInvoicePreviewKind(kind)
+    setInvoicePreviewName(name)
+    setPrintAfterPreviewLoad(printOnLoad)
+  }
+
+  function clearInvoicePreview() {
+    if (invoicePreviewUrl) URL.revokeObjectURL(invoicePreviewUrl)
+    setInvoicePreviewUrl(null)
+    setInvoicePreviewKind(null)
+    setInvoicePreviewName("")
+    setPrintAfterPreviewLoad(false)
+  }
+
+  function viewInvoiceFile(txn: SaleTransaction) {
+    setLatestInvoice(txn)
+    const html = invoiceHtml(txn)
+    const blob = new Blob([html], { type: "text/html" })
+    const url = URL.createObjectURL(blob)
+    replaceInvoicePreview(url, "html", `invoice-${txn.id.slice(0, 8)}.html`)
+  }
+
+  function printInvoice(txn: SaleTransaction) {
+    setLatestInvoice(txn)
+    const html = invoiceHtml(txn)
+    const blob = new Blob([html], { type: "text/html" })
+    const url = URL.createObjectURL(blob)
+    replaceInvoicePreview(url, "html", `invoice-${txn.id.slice(0, 8)}.html`, true)
+  }
+
+  async function createInvoicePdfBlob(txn: SaleTransaction) {
+    const moduleName = "jspdf"
+    const { jsPDF } = await import(/* @vite-ignore */ moduleName)
+    const doc = new jsPDF({ unit: "pt", format: "a4" })
+    const logoDataUrl = await getInvoiceLogoDataUrl()
+    const left = 44
+    const right = 551
+    const receiptNo = txn.id.slice(0, 8).toUpperCase()
+    let y = 56
+
+    doc.setFillColor(255, 255, 255)
+    doc.rect(0, 0, 595, 842, "F")
+
+    doc.setDrawColor(63, 63, 70)
+    doc.setLineWidth(1.1)
+    doc.roundedRect(28, 28, 539, 786, 12, 12, "S")
+
+    doc.setFillColor(239, 68, 68)
+    doc.rect(28, 28, 539, 4, "F")
+
+    if (logoDataUrl) {
+      doc.addImage(logoDataUrl, "JPEG", left, y - 14, 28, 28)
+    }
+
+    doc.setTextColor(39, 39, 42)
+    doc.setFont("helvetica", "bold")
+    doc.setFontSize(11)
+    doc.text("SPEC-C AUTO PMS XPRESS", left + 36, y)
+    doc.setFont("helvetica", "normal")
+    doc.setFontSize(9)
+    doc.setTextColor(82, 82, 91)
+    doc.text("Auto Service and Preventive Maintenance", left + 36, y + 14)
+
+    doc.setFont("helvetica", "bold")
+    doc.setFontSize(28)
+    doc.setTextColor(39, 39, 42)
+    doc.text("RECEIPT", right, y + 3, { align: "right" })
+    doc.setFont("courier", "normal")
+    doc.setFontSize(9)
+    doc.setTextColor(82, 82, 91)
+    doc.text(`No. ${receiptNo}`, right, y + 18, { align: "right" })
+
+    y += 34
+    doc.setDrawColor(63, 63, 70)
+    doc.setLineWidth(1)
+    doc.line(left, y, right, y)
+
+    y += 16
+    doc.setDrawColor(113, 113, 122)
+    doc.setFillColor(244, 244, 245)
+    doc.roundedRect(left, y, 245, 50, 8, 8, "FD")
+    doc.roundedRect(left + 260, y, 247, 50, 8, 8, "FD")
+
+    doc.setFont("helvetica", "bold")
+    doc.setFontSize(8)
+    doc.setTextColor(82, 82, 91)
+    doc.text("DATE / TIME", left + 10, y + 14)
+    doc.text("CASHIER", left + 270, y + 14)
+
+    doc.setFont("helvetica", "normal")
+    doc.setFontSize(10)
+    doc.setTextColor(39, 39, 42)
+    doc.text(new Date(txn.createdAt).toLocaleString(), left + 10, y + 31)
+    doc.text(txn.processedBy, left + 270, y + 31)
+
+    y += 66
+    doc.setDrawColor(113, 113, 122)
+    doc.setFillColor(244, 244, 245)
+    doc.roundedRect(left, y, right - left, 22, 6, 6, "FD")
+
+    const col = { item: left + 8, qty: left + 300, unit: left + 375, total: left + 467 }
+    doc.setFont("helvetica", "bold")
+    doc.setFontSize(8)
+    doc.setTextColor(82, 82, 91)
+    doc.text("DESCRIPTION", col.item, y + 14)
+    doc.text("QTY", col.qty, y + 14)
+    doc.text("UNIT PRICE", col.unit, y + 14)
+    doc.text("LINE TOTAL", col.total, y + 14)
+
+    y += 30
+    doc.setFontSize(10)
+    doc.setTextColor(39, 39, 42)
+
+    const printableLines: SaleLineItem[] = txn.lineItems.slice(0, 16)
+    for (const line of printableLines) {
+      if (y > 650) break
+      const amount = line.quantity * line.unitPrice
+      doc.setDrawColor(212, 212, 216)
+      doc.line(left, y + 16, right, y + 16)
+
+      doc.setFont("helvetica", "normal")
+      doc.text(line.itemName.slice(0, 42), col.item, y)
+      doc.setFont("courier", "normal")
+      doc.setFontSize(8)
+      doc.setTextColor(113, 113, 122)
+      doc.text(line.sku, col.item, y + 10)
+
+      doc.setFontSize(10)
+      doc.setTextColor(39, 39, 42)
+      doc.text(String(line.quantity), col.qty, y)
+      doc.text(formatMoney(line.unitPrice), col.unit, y)
+      doc.text(formatMoney(amount), col.total, y)
+      y += 22
+    }
+
+    y = Math.max(y + 8, 664)
+    doc.setDrawColor(113, 113, 122)
+    doc.roundedRect(left + 290, y, 217, 86, 8, 8, "S")
+
+    doc.setFont("helvetica", "normal")
+    doc.setFontSize(10)
+    doc.setTextColor(82, 82, 91)
+    doc.text("Subtotal", left + 304, y + 20)
+    doc.text("Discount", left + 304, y + 40)
+    doc.setFont("helvetica", "bold")
+    doc.text("Amount Paid", left + 304, y + 66)
+
+    doc.setFont("courier", "normal")
+    doc.setTextColor(39, 39, 42)
+    doc.text(formatMoney(txn.subtotal), right - 12, y + 20, { align: "right" })
+    doc.text(`- ${formatMoney(txn.discount)}`, right - 12, y + 40, { align: "right" })
+    doc.setFont("courier", "bold")
+    doc.text(formatMoney(txn.total), right - 12, y + 66, { align: "right" })
+
+    doc.setDrawColor(63, 63, 70)
+    doc.line(left, 764, right, 764)
+    doc.setFont("helvetica", "bold")
+    doc.setFontSize(9)
+    doc.setTextColor(63, 63, 70)
+    doc.text("THANK YOU FOR CHOOSING SPEC-C", 298, 781, { align: "center" })
+    doc.setFont("helvetica", "normal")
+    doc.setFontSize(8)
+    doc.setTextColor(113, 113, 122)
+    doc.text("This receipt is system generated and valid without signature.", left, 797)
+    doc.text(`Generated ${new Date().toLocaleString()}`, right, 797, { align: "right" })
+
+    return doc.output("blob") as Blob
+  }
+
+  async function saveInvoiceAsPdf(txn: SaleTransaction) {
+    setSavingInvoicePdf(true)
+    try {
+      setLatestInvoice(txn)
+      const blob = await createInvoicePdfBlob(txn)
+      const url = URL.createObjectURL(blob)
+      replaceInvoicePreview(url, "pdf", `invoice-${txn.id.slice(0, 8)}.pdf`)
+      toast.success("PDF is ready below.")
+    } catch {
+      toast.error("Unable to generate PDF right now.")
+    } finally {
+      setSavingInvoicePdf(false)
+    }
+  }
+
   function processSale() {
     if (cart.length === 0) { toast.error("Cart is empty."); return }
-    const discountPct = Math.min(100, Math.max(0, Number(posDiscount) || 0))
-    const subtotal = cart.reduce((sum, e) => sum + e.item.unitCost * e.qty, 0)
-    const discount = subtotal * (discountPct / 100)
-    const total = subtotal - discount
     const now = new Date().toISOString()
     const txn: SaleTransaction = {
       id: crypto.randomUUID(),
       lineItems: cart.map((e) => ({ itemId: e.item.id, itemName: e.item.name, sku: e.item.sku, quantity: e.qty, unitPrice: e.item.unitCost })),
-      subtotal, discount, total,
+      subtotal: cartSubtotal,
+      discount: cartDiscount,
+      total: cartTotal,
       processedBy: activeUser.name,
       createdAt: now,
     }
+    setPendingSale({ txn, cartEntries: [...cart] })
+  }
+
+  function confirmSalePayment() {
+    if (!pendingSale) return
+    const { txn, cartEntries } = pendingSale
     // Deduct stock
     const updatedInv = inventoryItems.map((it) => {
-      const entry = cart.find((e) => e.item.id === it.id)
+      const entry = cartEntries.find((e) => e.item.id === it.id)
       if (!entry) return it
-      return { ...it, quantity: it.quantity - entry.qty, updatedAt: now }
+      if (it.itemType === "service") return it
+      return { ...it, quantity: it.quantity - entry.qty, updatedAt: txn.createdAt }
     })
     writeInventory(updatedInv)
     setInventoryItems(updatedInv)
     const nextTxns = [txn, ...transactions]
     writeTransactions(nextTxns)
     setTransactions(nextTxns)
+    setPendingSale(null)
     setCart([])
     setPosDiscount("")
-    toast.success(`Sale processed — ₱${total.toLocaleString("en-PH", { minimumFractionDigits: 2 })}`)
+    clearInvoicePreview()
+    setLatestInvoice(txn)
+    toast.success(`Sale processed — ${formatMoney(txn.total)}`)
+  }
+
+  function cancelSalePayment() {
+    setPendingSale(null)
+    toast.message("Payment confirmation cancelled.")
   }
 
   const navigation = [
@@ -1350,10 +1832,11 @@ function PmsWorkspace({ onLogout }: PmsWorkspaceProps) {
           {permissions.read && page === "inventory" && (
             <div className="space-y-5">
               {/* Stats */}
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 {[
                   { icon: PackageIcon, label: "Total Items", value: inventoryItems.length },
-                  { icon: TrendingUpIcon, label: "Low Stock", value: inventoryItems.filter((i) => i.quantity <= i.reorderLevel).length },
+                  { icon: ScanTextIcon, label: "Services", value: inventoryItems.filter((i) => i.itemType === "service").length },
+                  { icon: TrendingUpIcon, label: "Low Stock", value: inventoryItems.filter((i) => i.itemType === "product" && i.quantity <= i.reorderLevel).length },
                   { icon: TagIcon, label: "Total Value", value: `₱${inventoryItems.reduce((s, i) => s + i.quantity * i.unitCost, 0).toLocaleString("en-PH")}` },
                 ].map(({ icon: Icon, label, value }) => (
                   <div key={label} className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
@@ -1401,6 +1884,19 @@ function PmsWorkspace({ onLogout }: PmsWorkspaceProps) {
                         {invFormErrors[field] && <p className="text-xs text-red-400">{invFormErrors[field]}</p>}
                       </div>
                     ))}
+                    <div className="space-y-1.5">
+                      <Label htmlFor="inv-itemType" className="text-xs text-zinc-300">Type</Label>
+                      <Select value={invForm.itemType} onValueChange={(value) => setInvForm((p) => ({ ...p, itemType: value as "product" | "service" }))}>
+                        <SelectTrigger id="inv-itemType" className="h-9 border-zinc-700/60 bg-zinc-800/50 text-zinc-100">
+                          <SelectValue placeholder="Select type" />
+                        </SelectTrigger>
+                        <SelectContent className="border-zinc-700/80 bg-zinc-900 text-zinc-100">
+                          <SelectItem value="product" className="focus:bg-zinc-800">Product</SelectItem>
+                          <SelectItem value="service" className="focus:bg-zinc-800">Service</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {invFormErrors.itemType && <p className="text-xs text-red-400">{invFormErrors.itemType}</p>}
+                    </div>
                     <div className="flex items-end gap-2 sm:col-span-2 md:col-span-3">
                       <button type="submit" className="flex h-9 items-center gap-2 rounded-lg bg-zinc-100 px-4 text-sm font-semibold text-zinc-900 transition-all hover:bg-white active:scale-[0.98]">
                         {editingItem ? "Save changes" : "Add item"}
@@ -1419,6 +1915,7 @@ function PmsWorkspace({ onLogout }: PmsWorkspaceProps) {
                   <TableHeader>
                     <TableRow className="border-zinc-800 hover:bg-transparent">
                       <TableHead className="text-zinc-500">Item</TableHead>
+                      <TableHead className="text-zinc-500">Type</TableHead>
                       <TableHead className="text-zinc-500">SKU</TableHead>
                       <TableHead className="text-zinc-500">Category</TableHead>
                       <TableHead className="text-right text-zinc-500">Qty</TableHead>
@@ -1433,15 +1930,20 @@ function PmsWorkspace({ onLogout }: PmsWorkspaceProps) {
                         return !q || it.name.toLowerCase().includes(q) || it.sku.toLowerCase().includes(q) || it.category.toLowerCase().includes(q)
                       })
                       .map((item) => {
-                        const lowStock = item.quantity <= item.reorderLevel
+                        const lowStock = item.itemType === "product" && item.quantity <= item.reorderLevel
                         return (
-                          <TableRow key={item.id} className="border-zinc-800 hover:bg-zinc-800/30">
+                          <TableRow key={item.id} className="hidden border-zinc-800 hover:bg-zinc-800/30 md:table-row">
                             <TableCell className="font-medium text-zinc-100">{item.name}</TableCell>
+                            <TableCell>
+                              <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider", item.itemType === "service" ? "bg-sky-500/15 text-sky-300" : "bg-zinc-800 text-zinc-300")}>
+                                {item.itemType}
+                              </span>
+                            </TableCell>
                             <TableCell className="font-mono text-xs text-zinc-400">{item.sku}</TableCell>
                             <TableCell className="text-zinc-400">{item.category}</TableCell>
                             <TableCell className="text-right">
                               <span className={cn("rounded-md px-2 py-0.5 font-mono text-xs font-semibold", lowStock ? "bg-red-500/15 text-red-400" : "bg-zinc-800 text-zinc-200")}>
-                                {item.quantity}
+                                {item.itemType === "service" ? "service" : item.quantity}
                                 {lowStock && " ⚠"}
                               </span>
                             </TableCell>
@@ -1461,9 +1963,46 @@ function PmsWorkspace({ onLogout }: PmsWorkspaceProps) {
                           </TableRow>
                         )
                       })}
+                    {inventoryItems
+                      .filter((it) => {
+                        const q = invSearch.toLowerCase()
+                        return !q || it.name.toLowerCase().includes(q) || it.sku.toLowerCase().includes(q) || it.category.toLowerCase().includes(q)
+                      })
+                      .map((item) => {
+                        const lowStock = item.itemType === "product" && item.quantity <= item.reorderLevel
+                        return (
+                          <TableRow key={`${item.id}-mobile`} className="border-zinc-800 md:hidden">
+                            <TableCell colSpan={7} className="px-4 py-3">
+                              <div className="space-y-2 rounded-lg border border-zinc-800 bg-zinc-900/70 p-3">
+                                <div className="flex items-start justify-between gap-2">
+                                  <div>
+                                    <p className="text-sm font-semibold text-zinc-100">{item.name}</p>
+                                    <p className="mt-1 font-mono text-[11px] text-zinc-500">{item.sku}</p>
+                                  </div>
+                                  <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider", item.itemType === "service" ? "bg-sky-500/15 text-sky-300" : "bg-zinc-800 text-zinc-300")}>{item.itemType}</span>
+                                </div>
+                                <div className="grid grid-cols-2 gap-2 text-[11px] text-zinc-400">
+                                  <p>Category: <span className="text-zinc-300">{item.category}</span></p>
+                                  <p className="text-right">Price: <span className="font-mono text-zinc-200">₱{item.unitCost.toLocaleString("en-PH")}</span></p>
+                                  <p>Stock: <span className={cn("font-mono", lowStock ? "text-red-400" : "text-zinc-300")}>{item.itemType === "service" ? "service" : item.quantity}</span></p>
+                                  <p className="text-right">Reorder: <span className="font-mono text-zinc-300">{item.reorderLevel}</span></p>
+                                </div>
+                                <div className="flex gap-2">
+                                  <button type="button" onClick={() => startEditItem(item)} className="flex-1 rounded-md border border-zinc-700/60 px-2.5 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-700 hover:text-zinc-100">
+                                    Edit
+                                  </button>
+                                  <button type="button" onClick={() => deleteInventoryItem(item.id)} disabled={!permissions.delete} className="flex-1 rounded-md border border-zinc-700/60 px-2.5 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:border-red-500/30 hover:bg-red-500/10 hover:text-red-400 disabled:opacity-40">
+                                    Delete
+                                  </button>
+                                </div>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        )
+                      })}
                     {inventoryItems.length === 0 && (
                       <TableRow className="border-zinc-800">
-                        <TableCell colSpan={6} className="py-12 text-center text-zinc-500">No items yet. Click "Add Item" to get started.</TableCell>
+                        <TableCell colSpan={7} className="py-12 text-center text-zinc-500">No items yet. Click "Add Item" to get started.</TableCell>
                       </TableRow>
                     )}
                   </TableBody>
@@ -1474,9 +2013,9 @@ function PmsWorkspace({ onLogout }: PmsWorkspaceProps) {
 
           {/* ─── POS ─── */}
           {permissions.read && page === "pos" && (
-            <div className="flex h-full min-h-0 gap-5">
+            <div className="grid h-full min-h-0 gap-5 xl:grid-cols-[1fr_320px]">
               {/* Item browser */}
-              <div className="flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto">
+              <div className="flex min-w-0 flex-col gap-4 overflow-y-auto">
                 <div className="relative">
                   <SearchIcon size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
                   <Input
@@ -1486,15 +2025,15 @@ function PmsWorkspace({ onLogout }: PmsWorkspaceProps) {
                     className="h-9 border-zinc-700/60 bg-zinc-900 pl-8 text-zinc-100 placeholder:text-zinc-600"
                   />
                 </div>
-                <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {inventoryItems
                     .filter((it) => {
                       const q = posSearch.toLowerCase()
-                      return !q || it.name.toLowerCase().includes(q) || it.sku.toLowerCase().includes(q)
+                      return !q || it.name.toLowerCase().includes(q) || it.sku.toLowerCase().includes(q) || it.category.toLowerCase().includes(q)
                     })
                     .map((item) => {
                       const inCart = cart.find((e) => e.item.id === item.id)
-                      const outOfStock = item.quantity === 0
+                      const outOfStock = item.itemType === "product" && item.quantity === 0
                       return (
                         <button
                           key={item.id}
@@ -1515,12 +2054,18 @@ function PmsWorkspace({ onLogout }: PmsWorkspaceProps) {
                               {inCart.qty}
                             </span>
                           )}
+                          <span className={cn("mb-2 inline-flex w-fit rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider", item.itemType === "service" ? "bg-sky-500/15 text-sky-300" : "bg-zinc-800 text-zinc-400")}>{item.itemType}</span>
                           <span className="mb-1 text-xs font-mono text-zinc-500">{item.sku}</span>
                           <span className="text-sm font-medium leading-tight text-zinc-100">{item.name}</span>
+                          <span className="mt-1 text-[11px] text-zinc-500">{item.category}</span>
                           <span className="mt-2 font-mono text-sm font-semibold text-zinc-300">₱{item.unitCost.toLocaleString("en-PH")}</span>
-                          <span className={cn("mt-1 text-[11px]", item.quantity <= item.reorderLevel ? "text-red-400" : "text-zinc-500")}>
-                            {item.quantity} in stock
-                          </span>
+                          {item.itemType === "service" ? (
+                            <span className="mt-1 text-[11px] text-sky-300/90">Service item</span>
+                          ) : (
+                            <span className={cn("mt-1 text-[11px]", item.quantity <= item.reorderLevel ? "text-red-400" : "text-zinc-500")}>
+                              {item.quantity} in stock
+                            </span>
+                          )}
                         </button>
                       )
                     })}
@@ -1528,7 +2073,7 @@ function PmsWorkspace({ onLogout }: PmsWorkspaceProps) {
               </div>
 
               {/* Cart panel */}
-              <div className="flex w-72 shrink-0 flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900">
+              <div className="flex w-full shrink-0 flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900 xl:w-80">
                 <div className="flex items-center gap-2 border-b border-zinc-800 px-4 py-3.5">
                   <ShoppingCartIcon size={14} className="text-zinc-400" />
                   <p className="text-sm font-semibold text-zinc-100">Cart</p>
@@ -1583,19 +2128,17 @@ function PmsWorkspace({ onLogout }: PmsWorkspaceProps) {
                   <div className="space-y-1 text-xs text-zinc-400">
                     <div className="flex justify-between">
                       <span>Subtotal</span>
-                      <span className="font-mono">₱{cart.reduce((s, e) => s + e.item.unitCost * e.qty, 0).toLocaleString("en-PH")}</span>
+                      <span className="font-mono">{formatMoney(cartSubtotal)}</span>
                     </div>
-                    {Number(posDiscount) > 0 && (
+                    {discountPct > 0 && (
                       <div className="flex justify-between text-red-400">
                         <span>Discount ({posDiscount}%)</span>
-                        <span className="font-mono">-₱{(cart.reduce((s, e) => s + e.item.unitCost * e.qty, 0) * (Number(posDiscount) / 100)).toLocaleString("en-PH")}</span>
+                        <span className="font-mono">- {formatMoney(cartDiscount)}</span>
                       </div>
                     )}
                     <div className="flex justify-between border-t border-zinc-800 pt-2 text-sm font-semibold text-zinc-100">
                       <span>Total</span>
-                      <span className="font-mono">
-                        ₱{(cart.reduce((s, e) => s + e.item.unitCost * e.qty, 0) * (1 - (Math.min(100, Math.max(0, Number(posDiscount) || 0)) / 100))).toLocaleString("en-PH", { minimumFractionDigits: 2 })}
-                      </span>
+                      <span className="font-mono">{formatMoney(cartTotal)}</span>
                     </div>
                   </div>
                   <button
@@ -1612,6 +2155,197 @@ function PmsWorkspace({ onLogout }: PmsWorkspaceProps) {
                       Clear cart
                     </button>
                   )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {pendingSale && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/70 p-4 backdrop-blur-sm">
+              <div className="w-full max-w-lg rounded-2xl border border-zinc-700/80 bg-zinc-950 shadow-2xl shadow-black/40">
+                <div className="border-b border-zinc-800 px-5 py-4">
+                  <p className="text-sm font-semibold text-zinc-100">Confirm Payment</p>
+                  <p className="mt-1 text-xs text-zinc-500">Verify payment details before generating invoice.</p>
+                </div>
+                <div className="space-y-3 px-5 py-4 text-sm">
+                  <div className="flex items-center justify-between text-zinc-400">
+                    <span>Line Items</span>
+                    <span className="font-mono text-zinc-200">{pendingSale.txn.lineItems.reduce((sum, item) => sum + item.quantity, 0)}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-zinc-400">
+                    <span>Subtotal</span>
+                    <span className="font-mono text-zinc-200">{formatMoney(pendingSale.txn.subtotal)}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-zinc-400">
+                    <span>Discount</span>
+                    <span className="font-mono text-zinc-200">- {formatMoney(pendingSale.txn.discount)}</span>
+                  </div>
+                  <div className="flex items-center justify-between border-t border-zinc-800 pt-3 text-base font-semibold text-zinc-100">
+                    <span>Total Due</span>
+                    <span className="font-mono">{formatMoney(pendingSale.txn.total)}</span>
+                  </div>
+                </div>
+                <div className="flex items-center justify-end gap-2 border-t border-zinc-800 px-5 py-4">
+                  <button
+                    type="button"
+                    onClick={cancelSalePayment}
+                    className="inline-flex h-9 items-center rounded-lg border border-zinc-700/60 px-3 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-800"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={confirmSalePayment}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-zinc-100 px-3 text-xs font-semibold text-zinc-900 transition-all hover:bg-white"
+                  >
+                    <ReceiptIcon size={12} />
+                    Confirm Payment
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {latestInvoice && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/70 p-4 backdrop-blur-sm">
+              <div className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-zinc-700/80 bg-zinc-950 shadow-2xl shadow-black/40">
+                <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
+                  <div>
+                    <p className="text-sm font-semibold text-zinc-100">Billing Invoice E-Document</p>
+                    <p className="mt-1 font-mono text-xs text-zinc-500">INV-{latestInvoice.id.slice(0, 8).toUpperCase()}</p>
+                  </div>
+                  <button type="button" onClick={() => { clearInvoicePreview(); setLatestInvoice(null) }} className="flex h-8 w-8 items-center justify-center rounded-md border border-zinc-700/70 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-200">
+                    <XIcon size={14} />
+                  </button>
+                </div>
+
+                <div className="overflow-y-auto px-5 py-5">
+                  <div className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-4">
+                    <div className="mb-4 flex flex-wrap items-start justify-between gap-3 border-b border-zinc-800 pb-4">
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">SPEC-C Auto PMS Xpress</p>
+                        <p className="mt-1 text-sm text-zinc-300">E-Document Billing Invoice</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-lg font-semibold text-zinc-100">Invoice</p>
+                        <p className="font-mono text-xs text-zinc-500">#{latestInvoice.id.slice(0, 8).toUpperCase()}</p>
+                      </div>
+                    </div>
+
+                    <div className="mb-4 grid gap-3 sm:grid-cols-3">
+                      <div className="rounded-lg border border-zinc-800 bg-zinc-950/70 p-3">
+                        <p className="text-[10px] uppercase tracking-widest text-zinc-500">Issued</p>
+                        <p className="mt-1 text-sm text-zinc-200">{new Date(latestInvoice.createdAt).toLocaleString()}</p>
+                      </div>
+                      <div className="rounded-lg border border-zinc-800 bg-zinc-950/70 p-3">
+                        <p className="text-[10px] uppercase tracking-widest text-zinc-500">Processed By</p>
+                        <p className="mt-1 text-sm text-zinc-200">{latestInvoice.processedBy}</p>
+                      </div>
+                      <div className="rounded-lg border border-zinc-800 bg-zinc-950/70 p-3">
+                        <p className="text-[10px] uppercase tracking-widest text-zinc-500">Line Items</p>
+                        <p className="mt-1 text-sm text-zinc-200">{latestInvoice.lineItems.reduce((sum, item) => sum + item.quantity, 0)}</p>
+                      </div>
+                    </div>
+
+                    <div className="overflow-hidden rounded-lg border border-zinc-800">
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="border-zinc-800 hover:bg-transparent">
+                            <TableHead className="text-zinc-500">Item</TableHead>
+                            <TableHead className="text-right text-zinc-500">Qty</TableHead>
+                            <TableHead className="text-right text-zinc-500">Unit Price</TableHead>
+                            <TableHead className="text-right text-zinc-500">Amount</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {latestInvoice.lineItems.map((line) => (
+                            <TableRow key={`${latestInvoice.id}-${line.itemId}`} className="border-zinc-800 hover:bg-zinc-800/20">
+                              <TableCell>
+                                <p className="text-sm text-zinc-200">{line.itemName}</p>
+                                <p className="font-mono text-[11px] text-zinc-500">{line.sku}</p>
+                              </TableCell>
+                              <TableCell className="text-right font-mono text-sm text-zinc-300">{line.quantity}</TableCell>
+                              <TableCell className="text-right font-mono text-sm text-zinc-300">{formatMoney(line.unitPrice)}</TableCell>
+                              <TableCell className="text-right font-mono text-sm font-semibold text-zinc-100">{formatMoney(line.unitPrice * line.quantity)}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+
+                    <div className="ml-auto mt-4 w-full max-w-xs space-y-2 rounded-lg border border-zinc-800 bg-zinc-950/70 p-3 text-sm">
+                      <div className="flex items-center justify-between text-zinc-400">
+                        <span>Subtotal</span>
+                        <span className="font-mono">{formatMoney(latestInvoice.subtotal)}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-zinc-400">
+                        <span>Discount</span>
+                        <span className="font-mono">- {formatMoney(latestInvoice.discount)}</span>
+                      </div>
+                      <div className="flex items-center justify-between border-t border-zinc-800 pt-2 text-base font-semibold text-zinc-100">
+                        <span>Total</span>
+                        <span className="font-mono">{formatMoney(latestInvoice.total)}</span>
+                      </div>
+                    </div>
+
+                    {invoicePreviewUrl && (
+                      <div className="mt-4 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">Document Preview ({invoicePreviewKind?.toUpperCase()})</p>
+                          <a
+                            href={invoicePreviewUrl}
+                            download={invoicePreviewName}
+                            className="inline-flex h-7 items-center gap-1 rounded-md border border-zinc-700/60 px-2 text-[11px] font-medium text-zinc-300 transition-colors hover:bg-zinc-800"
+                          >
+                            <DownloadIcon size={11} />
+                            Download
+                          </a>
+                        </div>
+                        <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950">
+                          <iframe
+                            ref={invoicePreviewRef}
+                            src={invoicePreviewUrl}
+                            title="Invoice preview"
+                            className="h-105 w-full"
+                            onLoad={() => {
+                              if (!printAfterPreviewLoad) return
+                              invoicePreviewRef.current?.contentWindow?.focus()
+                              invoicePreviewRef.current?.contentWindow?.print()
+                              setPrintAfterPreviewLoad(false)
+                            }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-end gap-2 border-t border-zinc-800 px-5 py-4">
+                  <button
+                    type="button"
+                    onClick={() => saveInvoiceAsPdf(latestInvoice)}
+                    disabled={savingInvoicePdf}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-zinc-100 px-3 text-xs font-semibold text-zinc-900 transition-all hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <FileDownIcon size={13} />
+                    {savingInvoicePdf ? "Generating..." : "Generate PDF"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => viewInvoiceFile(latestInvoice)}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-zinc-700/60 bg-zinc-900 px-3 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-800"
+                  >
+                    <ExternalLinkIcon size={13} />
+                    View File
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => printInvoice(latestInvoice)}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-zinc-700/60 bg-zinc-900 px-3 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-800"
+                  >
+                    <PrinterIcon size={13} />
+                    Preview & Print
+                  </button>
                 </div>
               </div>
             </div>
@@ -1717,6 +2451,7 @@ function PmsWorkspace({ onLogout }: PmsWorkspaceProps) {
                           <TableHead className="text-zinc-500">By</TableHead>
                           <TableHead className="text-zinc-500">Items</TableHead>
                           <TableHead className="text-right text-zinc-500">Total</TableHead>
+                          <TableHead className="text-right text-zinc-500">Invoice</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -1727,6 +2462,35 @@ function PmsWorkspace({ onLogout }: PmsWorkspaceProps) {
                             <TableCell className="text-sm text-zinc-400">{txn.lineItems.reduce((s, l) => s + l.quantity, 0)}</TableCell>
                             <TableCell className="text-right font-mono text-sm font-semibold text-zinc-100">
                               ₱{txn.total.toLocaleString("en-PH", { minimumFractionDigits: 2 })}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <div className="flex justify-end gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => setLatestInvoice(txn)}
+                                  className="inline-flex h-7 items-center gap-1 rounded-md border border-zinc-700/60 px-2 text-[11px] font-medium text-zinc-300 transition-colors hover:bg-zinc-800"
+                                >
+                                  <ReceiptIcon size={11} />
+                                  View
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => printInvoice(txn)}
+                                  className="inline-flex h-7 items-center gap-1 rounded-md border border-zinc-700/60 px-2 text-[11px] font-medium text-zinc-300 transition-colors hover:bg-zinc-800"
+                                >
+                                  <PrinterIcon size={11} />
+                                  Print
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => saveInvoiceAsPdf(txn)}
+                                  disabled={savingInvoicePdf}
+                                  className="inline-flex h-7 items-center gap-1 rounded-md border border-zinc-700/60 px-2 text-[11px] font-medium text-zinc-300 transition-colors hover:bg-zinc-800 disabled:opacity-50"
+                                >
+                                  <FileDownIcon size={11} />
+                                  PDF
+                                </button>
+                              </div>
                             </TableCell>
                           </TableRow>
                         ))}

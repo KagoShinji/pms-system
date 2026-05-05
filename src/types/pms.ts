@@ -28,6 +28,7 @@ export type InventoryItem = {
   id: string
   name: string
   sku: string
+  itemType: "product" | "service"
   category: string
   quantity: number
   unitCost: number
